@@ -27,7 +27,7 @@ func main() {
 	p2 := make(chan int)
 	p3 := make(chan int)
 
-	load_from := 25000
+	load_from := 3400
 	load_to := 1000 * 1000 * 1000
 
 	go startload(p1, load_from)
@@ -322,9 +322,7 @@ func loaditem3(id int) {
 	<-load_sell
 	<-load_buy
 
-	query = `commit`
-	_, err = db.Exec(query)
-	LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+	commit_db()
 
 	info := sels_type
 	if sels_type != selb_type {
@@ -332,6 +330,12 @@ func loaditem3(id int) {
 	}
 
 	LogPrint("load " + sid + ": " + name + ";  " + Itoa(len(sels.Nodes)) + " / " + Itoa(len(selb.Nodes)) + " " + info)
+}
+
+func commit_db() {
+	query := `commit`
+	_, err := db.Exec(query)
+	LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
 }
 
 func loadprices3(stype string, sel *goquery.Selection, tablename string, sid string, end_load chan bool) {
@@ -347,14 +351,19 @@ func loadprices3(stype string, sel *goquery.Selection, tablename string, sid str
 			price := s.Replace(Trim(t.Eq(2).Text()), ",", "", -1)
 			price = s.Replace(price, "ISK", "", -1)
 			price = s.Replace(price, "NPC", "", -1)
+			price = s.Replace(price, ".", "", -1)
 			cnt := s.Replace(Trim(t.Eq(1).Text()), ",", "", -1)
 			cnt = mf.StrRegexpReplace(cnt, "\\(Min: [\\d,]+\\)", "")
 			expires := Trim(t.Eq(3).Text()) + " " + mf.CurTimeStr()
 
 			query := `INSERT INTO ` + tablename + `(id,station,price,cnt,expires) 
-		         VALUES(` + sid + `,'` + station + `',` + price + `*100,` + cnt + `,'` + expires + `')`
+		         VALUES(` + sid + `,'` + station + `',` + price + `,` + cnt + `,'` + expires + `')`
 			_, err := db.Exec(query)
 			LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+
+			if i%10 == 0 {
+				commit_db()
+			}
 		}
 	} else if stype == "eve-central.com" {
 		for i, _ := range sel.Nodes {
@@ -366,14 +375,19 @@ func loadprices3(stype string, sel *goquery.Selection, tablename string, sid str
 			station := Trim(t.Eq(0).Text()) + " > " + s.Replace(Trim(t.Eq(1).Text()), "[-]", "", 1)
 
 			price := s.Replace(Trim(t.Eq(2).Text()), ",", "", -1)
+			price = s.Replace(price, ".", "", -1)
 			cnt := s.Replace(Trim(t.Eq(3).Text()), ",", "", -1)
 			cnt = mf.StrRegexpReplace(cnt, "\\(Min: [\\d,]+\\)", "")
 			expires := Trim(t.Eq(4).Text())
 
 			query := `INSERT INTO ` + tablename + `(id,station,price,cnt,expires) 
-		         VALUES(` + sid + `,'` + station + `',` + price + `*100,` + cnt + `,'` + expires + `')`
+		         VALUES(` + sid + `,'` + station + `',` + price + `,` + cnt + `,'` + expires + `')`
 			_, err := db.Exec(query)
 			LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+
+			if i%10 == 0 {
+				commit_db()
+			}
 		}
 	} else {
 		LogPrintErrAndExit("ОШИБКА нет обработки для: stype == "+stype+"\n\n", errors.New("Some problem"))

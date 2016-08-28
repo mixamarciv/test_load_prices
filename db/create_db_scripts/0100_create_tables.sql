@@ -1,8 +1,6 @@
 CREATE TABLE itemtype (
     id            INTEGER,
-    name          VARCHAR(2000),
-    DATE_CREATE   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    DATE_UPDATE   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    name          VARCHAR(2000)
 );
 
 CREATE UNIQUE INDEX itemtype_IDX2 ON itemtype (id);
@@ -14,9 +12,7 @@ CREATE TABLE sell_order (
     price         BIGINT,
     cnt           INTEGER,
     station       VARCHAR(1000),
-    expires       VARCHAR(10),
-    DATE_CREATE   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    DATE_UPDATE   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    expires       VARCHAR(300)
 );
 
 CREATE INDEX sell_order_IDX2 ON sell_order (id,price);
@@ -26,9 +22,7 @@ CREATE TABLE buy_order (
     price         BIGINT,
     cnt           INTEGER,
     station       VARCHAR(1000),
-    expires       VARCHAR(10),
-    DATE_CREATE   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    DATE_UPDATE   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    expires       VARCHAR(300)
 );
 CREATE INDEX buy_order_IDX2 ON buy_order (id,price);
 
