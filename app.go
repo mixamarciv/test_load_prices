@@ -13,6 +13,7 @@ import (
 	mf "github.com/mixamarciv/gofncstd3000"
 	"github.com/parnurzeal/gorequest"
 
+	"errors"
 	s "strings"
 )
 
@@ -26,7 +27,7 @@ func main() {
 	p2 := make(chan int)
 	p3 := make(chan int)
 
-	load_from := 2800
+	load_from := 25000
 	load_to := 1000 * 1000 * 1000
 
 	go startload(p1, load_from)
@@ -47,7 +48,7 @@ func main() {
 }
 
 func startload(p chan<- int, iditem int) {
-	loaditem2(iditem)
+	loaditem3(iditem)
 	p <- 1
 }
 
@@ -159,7 +160,6 @@ func loaditem2(id int) {
 		return
 	}
 	name := Trim(sel.Text())
-	name = s.Replace(name, " - Market Browser", "", 1)
 
 	sels := doc.Find("#sell_orders tr")
 	if len(sels.Nodes) < 2 {
@@ -219,10 +219,174 @@ func loadprices(sel *goquery.Selection, tablename string, sid string) {
 	}
 }
 
+func loaditem3(id int) {
+	sid := Itoa(id)
+	//LogPrint("load " + sid)
+
+	//удаляем старые данные в отдельной горутине
+	delete_old_item := make(chan bool, 1)
+	go func() {
+		query := `DELETE FROM itemtype WHERE id = ` + sid
+		_, err := db.Exec(query)
+		LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+
+		query = `DELETE FROM buy_order WHERE id = ` + sid
+		_, err = db.Exec(query)
+		LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+
+		query = `DELETE FROM sell_order WHERE id = ` + sid
+		_, err = db.Exec(query)
+		LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+
+		delete_old_item <- true
+	}()
+
+	//загружаем название и сел ордера
+	url := "http://eve-marketdata.com/price_check.php?region_id=-4&type=sell&type_id=" + sid
+	doc, err := goquery.NewDocument(url)
+	if err != nil {
+		LogPrint(Fmts("%#v", err))
+		LogPrintAndExit("request send error: \n url: " + url + "\n\n")
+	}
+
+	sel := doc.Find("h1")
+	if len(sel.Nodes) == 0 {
+		LogPrint("skip " + sid + ": not found h1")
+		return
+	}
+	name := Trim(sel.Text())
+
+	skip := 0 //флаг для загрузки ордеров с другого ресурса
+	sels := doc.Find(".price_check tr")
+	sels_type := "eve-marketdata.com"
+	if len(sels.Nodes) < 2 {
+		LogPrint("skip " + sid + ": not found sell_orders")
+		skip++
+	}
+
+	//загружаем бай ордера
+	url = "http://eve-marketdata.com/price_check.php?region_id=-4&type=buy&type_id=" + sid
+	doc, err = goquery.NewDocument(url)
+	if err != nil {
+		LogPrint(Fmts("%#v", err))
+		LogPrintAndExit("request send error: \n url: " + url + "\n\n")
+	}
+	selb := doc.Find(".price_check tr")
+	selb_type := "eve-marketdata.com"
+	if len(selb.Nodes) < 2 {
+		LogPrint("skip " + sid + ": not found buy_orders")
+		skip++
+	}
+
+	//если каких то ордеров нет, то пробуем загрузить их с другого сайта
+	if skip > 0 {
+		url = "https://eve-central.com/home/quicklook.html?typeid=" + sid
+		doc, err = goquery.NewDocument(url)
+		if err != nil {
+			LogPrint(Fmts("%#v", err))
+			LogPrintAndExit("request send error: \n url: " + url + "\n\n")
+		}
+
+		if len(sels.Nodes) < 2 {
+			sels = doc.Find("#sell_orders tr")
+			sels_type = "eve-central.com"
+			if len(sels.Nodes) < 2 {
+				LogPrint("skip " + sid + ": not found sell_orders")
+				return
+			}
+		}
+
+		if len(selb.Nodes) < 2 {
+			selb = doc.Find("#buy_orders tr")
+			selb_type = "eve-central.com"
+			if len(selb.Nodes) < 2 {
+				LogPrint("skip " + sid + ": not found buy_orders")
+				return
+			}
+		}
+	}
+
+	<-delete_old_item //ждем пока удалятся старые данные
+
+	name = s.Replace(name, "'", "''", -1)
+	query := `INSERT INTO itemtype(id,name) VALUES(` + sid + `,'` + name + `')`
+	_, err = db.Exec(query)
+	LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+
+	//загружаем ордера:
+	load_sell := make(chan bool, 1)
+	load_buy := make(chan bool, 1)
+	go loadprices3(sels_type, sels, "sell_order", sid, load_sell)
+	go loadprices3(selb_type, selb, "buy_order", sid, load_buy)
+
+	<-load_sell
+	<-load_buy
+
+	query = `commit`
+	_, err = db.Exec(query)
+	LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+
+	info := sels_type
+	if sels_type != selb_type {
+		info = info + " / " + selb_type
+	}
+
+	LogPrint("load " + sid + ": " + name + ";  " + Itoa(len(sels.Nodes)) + " / " + Itoa(len(selb.Nodes)) + " " + info)
+}
+
+func loadprices3(stype string, sel *goquery.Selection, tablename string, sid string, end_load chan bool) {
+	if stype == "eve-marketdata.com" {
+		for i, _ := range sel.Nodes {
+			t := sel.Eq(i).Find("td")
+			if len(t.Nodes) < 4 {
+				continue
+			}
+
+			station := Trim(t.Eq(0).Text())
+
+			price := s.Replace(Trim(t.Eq(2).Text()), ",", "", -1)
+			price = s.Replace(price, "ISK", "", -1)
+			price = s.Replace(price, "NPC", "", -1)
+			cnt := s.Replace(Trim(t.Eq(1).Text()), ",", "", -1)
+			cnt = mf.StrRegexpReplace(cnt, "\\(Min: [\\d,]+\\)", "")
+			expires := Trim(t.Eq(3).Text()) + " " + mf.CurTimeStr()
+
+			query := `INSERT INTO ` + tablename + `(id,station,price,cnt,expires) 
+		         VALUES(` + sid + `,'` + station + `',` + price + `*100,` + cnt + `,'` + expires + `')`
+			_, err := db.Exec(query)
+			LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+		}
+	} else if stype == "eve-central.com" {
+		for i, _ := range sel.Nodes {
+			t := sel.Eq(i).Find("td")
+			if len(t.Nodes) < 6 {
+				continue
+			}
+
+			station := Trim(t.Eq(0).Text()) + " > " + s.Replace(Trim(t.Eq(1).Text()), "[-]", "", 1)
+
+			price := s.Replace(Trim(t.Eq(2).Text()), ",", "", -1)
+			cnt := s.Replace(Trim(t.Eq(3).Text()), ",", "", -1)
+			cnt = mf.StrRegexpReplace(cnt, "\\(Min: [\\d,]+\\)", "")
+			expires := Trim(t.Eq(4).Text())
+
+			query := `INSERT INTO ` + tablename + `(id,station,price,cnt,expires) 
+		         VALUES(` + sid + `,'` + station + `',` + price + `*100,` + cnt + `,'` + expires + `')`
+			_, err := db.Exec(query)
+			LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+		}
+	} else {
+		LogPrintErrAndExit("ОШИБКА нет обработки для: stype == "+stype+"\n\n", errors.New("Some problem"))
+	}
+
+	end_load <- true
+}
+
 /************************
 SELECT
   (a.sell_price1 * MINVALUE(a.sell_cnt1,a.buy_cnt2)) AS sell1,
   (a.buy_price2 * MINVALUE(a.sell_cnt1,a.buy_cnt2)) AS buy2,
+  MINVALUE(a.sell_cnt1,a.buy_cnt2) AS cnt,
   (a.buy_price2 * MINVALUE(a.sell_cnt1,a.buy_cnt2)) - (a.sell_price1 * MINVALUE(a.sell_cnt1,a.buy_cnt2)) AS prof,
   a.*
 FROM
@@ -262,7 +426,7 @@ SELECT
 
   '-' AS tmp
 FROM itemtype a
-WHERE a.id > 0
+WHERE a.id > 1700
 ) a
 WHERE a.sell_price2 < a.buy_price2
   --AND a.sell_price2 * MINVALUE(a.sell_cnt2,a.buy_cnt2) < a.buy_price2 * MINVALUE(a.sell_cnt2,a.buy_cnt2)
@@ -270,5 +434,6 @@ WHERE a.sell_price2 < a.buy_price2
   AND a.sell_price1 * MINVALUE(a.sell_cnt1,a.buy_cnt1) < a.buy_price1 * MINVALUE(a.sell_cnt1,a.buy_cnt1) - 1*1000*1000
   AND a.sell_price1 * MINVALUE(a.sell_cnt1,a.buy_cnt2) < a.buy_price2 * MINVALUE(a.sell_cnt1,a.buy_cnt2) - 1*1000*1000
 
+ORDER BY prof DESC
 
 ***********************************/
