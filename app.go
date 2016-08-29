@@ -13,7 +13,10 @@ import (
 	mf "github.com/mixamarciv/gofncstd3000"
 	"github.com/parnurzeal/gorequest"
 
+	flags "github.com/jessevdk/go-flags"
+
 	"errors"
+	"os"
 	s "strings"
 )
 
@@ -23,12 +26,19 @@ var Itoa = strconv.Itoa
 func main() {
 	Initdb()
 
+	var opts struct {
+		Load_from  int `long:"load_from" description:"start load id from"`
+		Load_count int `long:"load_count" description:"count id load"`
+	}
+	_, err := flags.ParseArgs(&opts, os.Args)
+	LogPrintErrAndExit("ошибка разбора параметров", err)
+
 	p1 := make(chan int)
 	p2 := make(chan int)
 	p3 := make(chan int)
 
-	load_from := 3400
-	load_to := 1000 * 1000 * 1000
+	load_from := opts.Load_from                 //10
+	load_to := opts.Load_from + opts.Load_count //1000 * 1000 * 1000
 
 	go startload(p1, load_from)
 	go startload(p2, load_from+1)
@@ -260,7 +270,7 @@ func loaditem3(id int) {
 	sels := doc.Find(".price_check tr")
 	sels_type := "eve-marketdata.com"
 	if len(sels.Nodes) < 2 {
-		LogPrint("skip " + sid + ": not found sell_orders")
+		//LogPrint("skip " + sid + ": not found sell_orders")
 		skip++
 	}
 
@@ -274,7 +284,7 @@ func loaditem3(id int) {
 	selb := doc.Find(".price_check tr")
 	selb_type := "eve-marketdata.com"
 	if len(selb.Nodes) < 2 {
-		LogPrint("skip " + sid + ": not found buy_orders")
+		//LogPrint("skip " + sid + ": not found buy_orders")
 		skip++
 	}
 
@@ -351,13 +361,13 @@ func loadprices3(stype string, sel *goquery.Selection, tablename string, sid str
 			price := s.Replace(Trim(t.Eq(2).Text()), ",", "", -1)
 			price = s.Replace(price, "ISK", "", -1)
 			price = s.Replace(price, "NPC", "", -1)
-			price = s.Replace(price, ".", "", -1)
+			//price = s.Replace(price, ".", "", -1)
 			cnt := s.Replace(Trim(t.Eq(1).Text()), ",", "", -1)
 			cnt = mf.StrRegexpReplace(cnt, "\\(Min: [\\d,]+\\)", "")
 			expires := Trim(t.Eq(3).Text()) + " " + mf.CurTimeStr()
 
 			query := `INSERT INTO ` + tablename + `(id,station,price,cnt,expires) 
-		         VALUES(` + sid + `,'` + station + `',` + price + `,` + cnt + `,'` + expires + `')`
+		         VALUES(` + sid + `,'` + station + `',` + price + `*100,` + cnt + `,'` + expires + `')`
 			_, err := db.Exec(query)
 			LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
 
@@ -375,13 +385,13 @@ func loadprices3(stype string, sel *goquery.Selection, tablename string, sid str
 			station := Trim(t.Eq(0).Text()) + " > " + s.Replace(Trim(t.Eq(1).Text()), "[-]", "", 1)
 
 			price := s.Replace(Trim(t.Eq(2).Text()), ",", "", -1)
-			price = s.Replace(price, ".", "", -1)
+			//price = s.Replace(price, ".", "", -1)
 			cnt := s.Replace(Trim(t.Eq(3).Text()), ",", "", -1)
 			cnt = mf.StrRegexpReplace(cnt, "\\(Min: [\\d,]+\\)", "")
 			expires := Trim(t.Eq(4).Text())
 
 			query := `INSERT INTO ` + tablename + `(id,station,price,cnt,expires) 
-		         VALUES(` + sid + `,'` + station + `',` + price + `,` + cnt + `,'` + expires + `')`
+		         VALUES(` + sid + `,'` + station + `',` + price + `*100,` + cnt + `,'` + expires + `')`
 			_, err := db.Exec(query)
 			LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
 

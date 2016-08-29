@@ -23,8 +23,8 @@ func Initdb() {
 	LogPrintErrAndExit("ошибка подключения к базе данных "+dbopt, err)
 	LogPrint("установлено подключение к БД: " + dbopt)
 
-	db.SetMaxOpenConns(1000)
-	db.SetMaxIdleConns(1000)
+	db.SetMaxOpenConns(200)
+	db.SetMaxIdleConns(100)
 
 	query := `SELECT CAST(COUNT(*) AS VARCHAR(100)) FROM itemtype `
 	rows, err := db.Query(query)
