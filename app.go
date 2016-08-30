@@ -21,14 +21,16 @@ import (
 )
 
 var Fmts = fmt.Sprintf
+var Print = fmt.Print
 var Itoa = strconv.Itoa
 
 func main() {
 	Initdb()
 
 	var opts struct {
-		Load_from  int `long:"load_from" description:"start load id from"`
-		Load_count int `long:"load_count" description:"count id load"`
+		Load_from   int `long:"load_from" description:"start load id from"`
+		Load_count  int `long:"load_count" description:"count id load"`
+		Update_only int `long:"update_only" description:"update only" default:"0"`
 	}
 	_, err := flags.ParseArgs(&opts, os.Args)
 	LogPrintErrAndExit("ошибка разбора параметров", err)
@@ -36,29 +38,61 @@ func main() {
 	p1 := make(chan int)
 	p2 := make(chan int)
 	p3 := make(chan int)
+	go func() {
+		p3 <- 0
+		p2 <- 0
+		p1 <- 0
+	}()
 
 	load_from := opts.Load_from                 //10
 	load_to := opts.Load_from + opts.Load_count //1000 * 1000 * 1000
 
-	go startload(p1, load_from)
-	go startload(p2, load_from+1)
-	go startload(p3, load_from+2)
+	if opts.Update_only == 0 {
+		LogPrint("Загрузка новых записей в бд")
+		loadtype := 0
+		//go startload(p1, load_from)
+		//go startload(p2, load_from+1)
+		//go startload(p3, load_from+2)
 
-	for i := load_from + 3; i < load_to; i++ {
-		select {
-		case <-p1:
-			go startload(p1, i)
-		case <-p2:
-			go startload(p2, i)
-		case <-p3:
-			go startload(p3, i)
+		for i := load_from + 3; i < load_to; i++ {
+			select {
+			case <-p1:
+				go startload(p1, i, loadtype)
+			case <-p2:
+				go startload(p2, i, loadtype)
+			case <-p3:
+				go startload(p3, i, loadtype)
+			}
+		}
+	} else {
+		LogPrint("Обновление существующих записей в бд")
+		loadtype := 1
+		query := `SELECT FIRST ` + Itoa(opts.Load_count) + ` SKIP ` + Itoa(opts.Load_from) +
+			` id FROM itemtype ORDER BY id`
+		rows, err := db.Query(query)
+		LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+		var i int
+		for rows.Next() {
+			err = rows.Scan(&i)
+			LogPrintErrAndExit("rows.Scan error: \n"+query+"\n\n", err)
+			select {
+			case <-p1:
+				go startload(p1, i, loadtype)
+			case <-p2:
+				go startload(p2, i, loadtype)
+			case <-p3:
+				go startload(p3, i, loadtype)
+			}
 		}
 	}
 
+	<-p3
+	<-p2
+	<-p1
 }
 
-func startload(p chan<- int, iditem int) {
-	loaditem3(iditem)
+func startload(p chan<- int, iditem int, loadtype int) {
+	loaditem3(iditem, loadtype)
 	p <- 1
 }
 
@@ -229,19 +263,21 @@ func loadprices(sel *goquery.Selection, tablename string, sid string) {
 	}
 }
 
-func loaditem3(id int) {
+func loaditem3(id int, loadtype int) {
 	sid := Itoa(id)
 	//LogPrint("load " + sid)
 
 	//удаляем старые данные в отдельной горутине
 	delete_old_item := make(chan bool, 1)
 	go func() {
-		query := `DELETE FROM itemtype WHERE id = ` + sid
-		_, err := db.Exec(query)
-		LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+		if loadtype == 0 {
+			query := `DELETE FROM itemtype WHERE id = ` + sid
+			_, err := db.Exec(query)
+			LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+		}
 
-		query = `DELETE FROM buy_order WHERE id = ` + sid
-		_, err = db.Exec(query)
+		query := `DELETE FROM buy_order WHERE id = ` + sid
+		_, err := db.Exec(query)
 		LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
 
 		query = `DELETE FROM sell_order WHERE id = ` + sid
@@ -301,7 +337,7 @@ func loaditem3(id int) {
 			sels = doc.Find("#sell_orders tr")
 			sels_type = "eve-central.com"
 			if len(sels.Nodes) < 2 {
-				LogPrint("skip " + sid + ": not found sell_orders")
+				Print("skip " + sid + ": not found sell_orders \n")
 				return
 			}
 		}
@@ -310,7 +346,7 @@ func loaditem3(id int) {
 			selb = doc.Find("#buy_orders tr")
 			selb_type = "eve-central.com"
 			if len(selb.Nodes) < 2 {
-				LogPrint("skip " + sid + ": not found buy_orders")
+				Print("skip " + sid + ": not found buy_orders \n")
 				return
 			}
 		}
@@ -318,10 +354,12 @@ func loaditem3(id int) {
 
 	<-delete_old_item //ждем пока удалятся старые данные
 
-	name = s.Replace(name, "'", "''", -1)
-	query := `INSERT INTO itemtype(id,name) VALUES(` + sid + `,'` + name + `')`
-	_, err = db.Exec(query)
-	LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+	if loadtype == 0 {
+		name = s.Replace(name, "'", "''", -1)
+		query := `INSERT INTO itemtype(id,name) VALUES(` + sid + `,'` + name + `')`
+		_, err = db.Exec(query)
+		LogPrintErrAndExit("ОШИБКА выполнения запроса: \n"+query+"\n\n", err)
+	}
 
 	//загружаем ордера:
 	load_sell := make(chan bool, 1)

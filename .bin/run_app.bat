@@ -17,9 +17,10 @@ go build -o app.exe
 SET start_from=0
 SET load_count=200
 SET load_to=2147483646
+SET update_only=1
 
 for /l %%i in (%start_from%,%load_count%,%load_to%) do (
-	app.exe --load_from %%i --load_count %load_count%
+	app.exe --load_from %%i --load_count %load_count% --update_only %update_only%
 )
 
 @echo ==== end ======================================================================
